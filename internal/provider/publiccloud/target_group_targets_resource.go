@@ -1,7 +1,12 @@
 package publiccloud
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"sort"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -111,12 +116,8 @@ func (t *targetGroupTargetsResource) Create(
 	}
 
 	if len(instanceIDs) > 0 {
-		httpResponse, err := t.PubliccloudAPI.
-			RegisterTargets(ctx, plan.TargetGroupID.ValueString()).
-			RequestBody(instanceIDs).
-			Execute()
-		if err != nil {
-			utils.SdkError(ctx, &response.Diagnostics, err, httpResponse)
+		if err := t.registerTargetsDirect(ctx, plan.TargetGroupID.ValueString(), instanceIDs); err != nil {
+			response.Diagnostics.AddError("Unexpected Error", err.Error())
 			return
 		}
 	}
@@ -225,23 +226,15 @@ func (t *targetGroupTargetsResource) Update(
 	targetGroupID := plan.TargetGroupID.ValueString()
 
 	if len(toRemove) > 0 {
-		httpResponse, err := t.PubliccloudAPI.
-			DeregisterTargets(ctx, targetGroupID).
-			RequestBody(toRemove).
-			Execute()
-		if err != nil {
-			utils.SdkError(ctx, &response.Diagnostics, err, httpResponse)
+		if err := t.deregisterTargetsDirect(ctx, targetGroupID, toRemove); err != nil {
+			response.Diagnostics.AddError("Unexpected Error", err.Error())
 			return
 		}
 	}
 
 	if len(toAdd) > 0 {
-		httpResponse, err := t.PubliccloudAPI.
-			RegisterTargets(ctx, targetGroupID).
-			RequestBody(toAdd).
-			Execute()
-		if err != nil {
-			utils.SdkError(ctx, &response.Diagnostics, err, httpResponse)
+		if err := t.registerTargetsDirect(ctx, targetGroupID, toAdd); err != nil {
+			response.Diagnostics.AddError("Unexpected Error", err.Error())
 			return
 		}
 	}
@@ -269,14 +262,50 @@ func (t *targetGroupTargetsResource) Delete(
 	}
 
 	if len(instanceIDs) > 0 {
-		httpResponse, err := t.PubliccloudAPI.
-			DeregisterTargets(ctx, state.TargetGroupID.ValueString()).
-			RequestBody(instanceIDs).
-			Execute()
-		if err != nil {
-			utils.SdkError(ctx, &response.Diagnostics, err, httpResponse)
+		if err := t.deregisterTargetsDirect(ctx, state.TargetGroupID.ValueString(), instanceIDs); err != nil {
+			response.Diagnostics.AddError("Unexpected Error", err.Error())
 		}
 	}
+}
+
+// registerTargetsDirect calls the Leaseweb API directly with the correct
+// request body format: {"targets": ["id1", "id2"]}.
+// The SDK incorrectly sends a bare array, which the API rejects.
+func (t *targetGroupTargetsResource) registerTargetsDirect(ctx context.Context, targetGroupID string, instanceIDs []string) error {
+	return t.targetGroupTargetsDirect(ctx, targetGroupID, instanceIDs, "registerTargets")
+}
+
+func (t *targetGroupTargetsResource) deregisterTargetsDirect(ctx context.Context, targetGroupID string, instanceIDs []string) error {
+	return t.targetGroupTargetsDirect(ctx, targetGroupID, instanceIDs, "deregisterTargets")
+}
+
+func (t *targetGroupTargetsResource) targetGroupTargetsDirect(ctx context.Context, targetGroupID string, instanceIDs []string, action string) error {
+	body := map[string][]string{"targets": instanceIDs}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/publicCloud/v1/targetGroups/%s/%s", t.APIBaseURL, targetGroupID, action)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-LSW-Auth", t.Token)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
 
 func NewTargetGroupTargetsResource() resource.Resource {

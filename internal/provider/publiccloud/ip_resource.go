@@ -22,6 +22,7 @@ type ipResourceModel struct {
 	ReverseLookup types.String `tfsdk:"reverse_lookup"`
 	InstanceID    types.String `tfsdk:"instance_id"`
 	IP            types.String `tfsdk:"ip"`
+	NetworkType   types.String `tfsdk:"network_type"`
 }
 
 type ipResource struct {
@@ -33,6 +34,7 @@ func adaptIpDetailsToIPResource(ipDetails publiccloud.IpDetails) ipResourceModel
 	return ipResourceModel{
 		ReverseLookup: basetypes.NewStringPointerValue(reverseLookup),
 		IP:            basetypes.NewStringValue(ipDetails.GetIp()),
+		NetworkType:   basetypes.NewStringValue(string(ipDetails.GetNetworkType())),
 	}
 }
 

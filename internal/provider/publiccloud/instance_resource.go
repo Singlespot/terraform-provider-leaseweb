@@ -136,6 +136,7 @@ func adaptInstanceDetailsToInstanceResource(
 			"reverse_lookup": types.StringType,
 			"instance_id":    types.StringType,
 			"ip":             types.StringType,
+			"network_type":   types.StringType,
 		},
 		ctx,
 		adaptIpDetailsToIPResource,
@@ -455,14 +456,14 @@ func (i *instanceResource) waitUntilPropertyValueEquals(
 	// Create a constant backoff with a 5-second retry interval
 	bo := backoff.NewConstantBackOff(10 * time.Second)
 
-	// Set the retry limit to 30 retries (5 minutes)
+	// Set the retry limit to 60 retries (10 minutes)
 	retryCount := 0
-	maxRetries := 30
+	maxRetries := 60
 
 	// Start polling and retrying
 	for {
 		if retryCount >= maxRetries {
-			return nil, nil, errors.New("timed out waiting for property to change after 5 minutes")
+			return nil, nil, errors.New("timed out waiting for property to change after 10 minutes")
 		}
 
 		instanceDetails, httpResponse, err := i.PubliccloudAPI.
@@ -556,6 +557,14 @@ func (i *instanceResource) Update(
 	)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+
+	// Preserve write-only fields that the API does not return
+	if !plan.SshKey.IsUnknown() {
+		state.SshKey = plan.SshKey
+	}
+	if !plan.UserData.IsUnknown() {
+		state.UserData = plan.UserData
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, state)...)
@@ -702,6 +711,10 @@ func (i *instanceResource) Schema(
 						},
 						"reverse_lookup": schema.StringAttribute{
 							Computed: true,
+						},
+						"network_type": schema.StringAttribute{
+							Computed:    true,
+							Description: "Network type: INTERNAL or PUBLIC",
 						},
 					},
 				},

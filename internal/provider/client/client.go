@@ -16,6 +16,8 @@ type Client struct {
 	DedicatedserverAPI dedicatedserver.DedicatedserverAPI
 	DNSAPI             dns.DnsAPI
 	IPmgmtAPI          ipmgmt.IpmgmtAPI
+	Token              string
+	APIBaseURL         string
 }
 
 type Optional struct {
@@ -61,10 +63,21 @@ func NewClient(token string, optional Optional, version string) Client {
 	dnsAPI := dns.NewAPIClient(dnsCFG)
 	ipmgmtAPI := ipmgmt.NewAPIClient(ipmgmtCFG)
 
+	apiBaseURL := "https://api.leaseweb.com"
+	if optional.Host != nil {
+		scheme := "https"
+		if optional.Scheme != nil {
+			scheme = *optional.Scheme
+		}
+		apiBaseURL = scheme + "://" + *optional.Host
+	}
+
 	return Client{
 		PubliccloudAPI:     publiccloudAPI.PubliccloudAPI,
 		DedicatedserverAPI: dedicatedserverAPI.DedicatedserverAPI,
 		DNSAPI:             dnsAPI.DnsAPI,
 		IPmgmtAPI:          ipmgmtAPI.IpmgmtAPI,
+		Token:              token,
+		APIBaseURL:         apiBaseURL,
 	}
 }

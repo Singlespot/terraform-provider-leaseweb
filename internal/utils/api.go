@@ -49,6 +49,8 @@ type ResourceAPI struct {
 	DedicatedserverAPI dedicatedserver.DedicatedserverAPI
 	DNSAPI             dns.DnsAPI
 	IPmgmtAPI          ipmgmt.IpmgmtAPI
+	Token              string
+	APIBaseURL         string
 }
 
 func (p *ResourceAPI) Configure(
@@ -65,6 +67,8 @@ func (p *ResourceAPI) Configure(
 	p.DedicatedserverAPI = coreClient.DedicatedserverAPI
 	p.DNSAPI = coreClient.DNSAPI
 	p.IPmgmtAPI = coreClient.IPmgmtAPI
+	p.Token = coreClient.Token
+	p.APIBaseURL = coreClient.APIBaseURL
 }
 
 func (p *ResourceAPI) Metadata(
