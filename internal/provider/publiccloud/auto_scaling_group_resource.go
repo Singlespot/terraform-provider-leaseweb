@@ -2,6 +2,10 @@ package publiccloud
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int32validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
@@ -263,11 +267,54 @@ func (a *autoScalingGroupResource) Create(
 		CreateAutoScalingGroupOpts(*opts).
 		Execute()
 	if err != nil {
+		// The SDK requires "targetGroups" in the response, but the Create
+		// endpoint omits it. If the API returned 201, parse the response
+		// manually instead of failing.
+		if httpResponse != nil && httpResponse.StatusCode == 201 {
+			body, readErr := io.ReadAll(httpResponse.Body)
+			if readErr != nil {
+				utils.SdkError(ctx, &response.Diagnostics, err, nil)
+				return
+			}
+			var parsed publiccloud.AutoScalingGroupDetails
+			// Use a partial struct to avoid the strict UnmarshalJSON validation.
+			var raw map[string]json.RawMessage
+			if jsonErr := json.Unmarshal(body, &raw); jsonErr != nil {
+				utils.ReportError(fmt.Sprintf("failed to parse Create response: %s", jsonErr), &response.Diagnostics)
+				return
+			}
+			// Inject an empty targetGroups array if missing, then decode.
+			if _, ok := raw["targetGroups"]; !ok {
+				raw["targetGroups"] = json.RawMessage("[]")
+			}
+			patched, _ := json.Marshal(raw)
+			if jsonErr := json.Unmarshal(patched, &parsed); jsonErr != nil {
+				utils.ReportError(fmt.Sprintf("failed to decode Create response: %s", jsonErr), &response.Diagnostics)
+				return
+			}
+			// Wait for the ASG to leave CREATING state before returning,
+			// so dependent resources (e.g. target group association) can proceed.
+			activeASG, waitErr := a.waitForActive(ctx, parsed.GetId(), 5*time.Minute)
+			if waitErr != nil {
+				utils.ReportError(waitErr.Error(), &response.Diagnostics)
+				return
+			}
+			model := adaptAutoScalingGroupDetailsToResource(*activeASG)
+			model.InstanceID = plan.InstanceID
+			response.Diagnostics.Append(response.State.Set(ctx, model)...)
+			return
+		}
 		utils.SdkError(ctx, &response.Diagnostics, err, httpResponse)
 		return
 	}
 
-	model := adaptAutoScalingGroupDetailsToResource(*sdkASG)
+	activeASG, waitErr := a.waitForActive(ctx, sdkASG.GetId(), 5*time.Minute)
+	if waitErr != nil {
+		utils.ReportError(waitErr.Error(), &response.Diagnostics)
+		return
+	}
+
+	model := adaptAutoScalingGroupDetailsToResource(*activeASG)
 	model.InstanceID = plan.InstanceID
 
 	response.Diagnostics.Append(response.State.Set(ctx, model)...)
@@ -367,6 +414,31 @@ func (a *autoScalingGroupResource) Delete(
 
 	if err != nil {
 		utils.SdkError(ctx, &response.Diagnostics, err, httpResponse)
+	}
+}
+
+// waitForAutoScalingGroupActive polls the API until the ASG leaves the
+// CREATING state or the timeout is reached.
+func (a *autoScalingGroupResource) waitForActive(
+	ctx context.Context,
+	id string,
+	timeout time.Duration,
+) (*publiccloud.AutoScalingGroupDetails, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		asg, _, err := a.PubliccloudAPI.
+			GetAutoScalingGroup(ctx, id).
+			Execute()
+		if err != nil {
+			return nil, err
+		}
+		if asg.GetState() != "CREATING" {
+			return asg, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for auto scaling group %s to become active (still %s)", id, asg.GetState())
+		}
+		time.Sleep(5 * time.Second)
 	}
 }
 

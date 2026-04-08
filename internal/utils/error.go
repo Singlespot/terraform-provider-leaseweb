@@ -94,9 +94,11 @@ func SdkError(
 	logDebug(fmt.Sprintf("response body: %v", resp.Body), ctx)
 
 	// Parse the response body. If it can't be parsed throw a general error.
+	// ErrorDetails can be either a map (validation errors) or an empty array []
+	// depending on the API endpoint — use RawMessage to avoid decode failures.
 	var errorResponse struct {
-		ErrorDetails map[string]any `json:"errorDetails,omitempty"`
-		ErrorMessage string         `json:"errorMessage,omitempty"`
+		ErrorDetails json.RawMessage `json:"errorDetails,omitempty"`
+		ErrorMessage string          `json:"errorMessage,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&errorResponse); err != nil {
 		logDebug(
@@ -108,10 +110,14 @@ func SdkError(
 	}
 
 	// Show returned errors to the end user.
+	// Only attempt to parse ErrorDetails as a map if it's not an array.
 	if len(errorResponse.ErrorDetails) > 0 {
-		handleValidationError(errorResponse.ErrorDetails, diags)
-		if diags.HasError() {
-			return
+		var errorDetailsMap map[string]any
+		if err := json.Unmarshal(errorResponse.ErrorDetails, &errorDetailsMap); err == nil && len(errorDetailsMap) > 0 {
+			handleValidationError(errorDetailsMap, diags)
+			if diags.HasError() {
+				return
+			}
 		}
 	}
 
