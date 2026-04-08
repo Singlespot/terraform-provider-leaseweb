@@ -336,8 +336,18 @@ func (l *loadBalancerResource) Delete(
 		return
 	}
 
+	contract := contractResourceModel{}
+	state.Contract.As(
+		ctx,
+		&contract,
+		basetypes.ObjectAsOptions{},
+	)
+
 	opts := publiccloud.NewTerminateLoadBalancerOpts("CANCEL_OTHER")
-	opts.SetReason("Terraform")
+
+	if publiccloud.ContractType(contract.Type.ValueString()) == publiccloud.CONTRACTTYPE_MONTHLY {
+		opts.SetReason("Terraform")
+	}
 
 	httpResponse, err := l.PubliccloudAPI.TerminateLoadBalancer(
 		ctx,
